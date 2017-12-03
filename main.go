@@ -60,6 +60,11 @@ type person struct {
 	Timestamp string
 }
 
+type BlobObject struct {
+	object
+	Body []byte
+}
+
 type Author person
 type Committer person
 
@@ -151,6 +156,10 @@ func ParseCommit(obj *CommitObject, buf *bytes.Buffer) error {
 	return nil
 }
 
+func ParseBlob(obj *BlobObject, buf *bytes.Buffer) {
+	obj.Body = buf.Bytes()
+}
+
 func Parse(buf *bytes.Buffer) (interface{}, error) {
 	var obj object
 	n, b, err := parseType(buf)
@@ -178,6 +187,10 @@ func Parse(buf *bytes.Buffer) (interface{}, error) {
 		obj := &TreeObject{object: obj}
 		err = ParseTree(obj, buf)
 		return obj, err
+	case "blob":
+		obj := &BlobObject{object: obj}
+		ParseBlob(obj, buf)
+		return obj, nil
 	default:
 		return nil, fmt.Errorf("unknown type: %s", obj.Type)
 	}
