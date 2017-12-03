@@ -65,6 +65,19 @@ type BlobObject struct {
 	Body []byte
 }
 
+type Tag struct {
+	Object  string
+	Type    string
+	Name    string
+	Tagger  string
+	Comment string
+}
+
+type TagObject struct {
+	object
+	Body *Tag
+}
+
 type Author person
 type Committer person
 
@@ -160,6 +173,41 @@ func ParseBlob(obj *BlobObject, buf *bytes.Buffer) {
 	obj.Body = buf.Bytes()
 }
 
+type headerReader struct {
+	b   *bytes.Buffer
+	err error
+}
+
+func (r *headerReader) readString(b byte) string {
+	if r.err != nil {
+		return ""
+	}
+	var s string
+	s, r.err = r.b.ReadString(b)
+	if r.err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.SplitN(s, " ", 2)[1])
+}
+
+func ParseTag(obj *TagObject, buf *bytes.Buffer) error {
+	tag := &Tag{}
+	r := headerReader{b: buf}
+	tag.Object = r.readString('\n')
+	tag.Type = r.readString('\n')
+	tag.Name = r.readString('\n')
+	tag.Tagger = r.readString('\n')
+	buf.ReadString('\n') // skip empty line
+	var err error
+	tag.Comment, err = buf.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	tag.Comment = strings.TrimSpace(tag.Comment)
+	obj.Body = tag
+	return r.err
+}
+
 func Parse(buf *bytes.Buffer) (interface{}, error) {
 	var obj object
 	n, b, err := parseType(buf)
@@ -190,6 +238,10 @@ func Parse(buf *bytes.Buffer) (interface{}, error) {
 	case "blob":
 		obj := &BlobObject{object: obj}
 		ParseBlob(obj, buf)
+		return obj, nil
+	case "tag":
+		obj := &TagObject{object: obj}
+		ParseTag(obj, buf)
 		return obj, nil
 	default:
 		return nil, fmt.Errorf("unknown type: %s", obj.Type)
@@ -231,6 +283,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	pp.Println(buf.String())
 
 	obj, err := Parse(buf)
 	if err != nil {
