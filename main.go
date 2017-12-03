@@ -18,14 +18,37 @@ const (
 	typeMaxLen = 6 // "commit" in ["commit", "tree", "blob", "tag"]
 )
 
-type Object struct {
+var treeType = map[string]string{
+	"40":  "child tree (directory)",
+	"100": "child blob (file)",
+	"120": "symlink",
+	"160": "submodule",
+}
+
+type object struct {
 	Type string
 	Size int
+}
+
+type TreeObject struct {
+	object
+	Body []TreeFile
+}
+
+type TreeFile struct {
+	Name string
+	Type string
+	Mode string
+	Hash string
+}
+
+type CommitObject struct {
+	object
 	Body *Commit
 }
 
 type Commit struct {
-	Tree      string
+	Tree      *TreeObject
 	Parent    []string
 	Author    *Author
 	Committer *Committer
@@ -56,14 +79,12 @@ func parseCommit(s *bufio.Scanner) (*Commit, error) {
 	var commit Commit
 	for s.Scan() {
 		line := s.Text()
+		pp.Println(line)
 		sp := strings.Split(line, " ")
 		switch sp[0] {
-		case "tree":
-			commit.Tree = sp[1]
 		case "parent":
 			commit.Parent = append(commit.Parent, sp[1])
-		case "author":
-		case "committer":
+		case "author", "committer":
 			username, email, timestamp := sp[1], sp[2], strings.Join(sp[3:], " ")
 			if sp[0] == "author" {
 				commit.Author = &Author{
@@ -83,8 +104,55 @@ func parseCommit(s *bufio.Scanner) (*Commit, error) {
 	return &commit, nil
 }
 
-func Parse(buf *bytes.Buffer) (*Object, error) {
-	var obj Object
+func ParseTree(obj *TreeObject, buf *bytes.Buffer) error {
+	for _, s := range strings.Split(buf.String(), ":") {
+		var file TreeFile
+		sp := strings.Split(s, " ")
+		file.Type = treeType[sp[0][0:len(sp[0])-3]]
+		file.Mode = sp[0][len(sp[0])-3:]
+
+		for i, b := range []byte(sp[1]) {
+			if b == 0x00 {
+				file.Name = string(sp[1][:i])
+				file.Hash = fmt.Sprintf("%x", sp[1][i+1:])
+			}
+		}
+		obj.Body = append(obj.Body, file)
+	}
+	return nil
+}
+
+func ParseCommit(obj *CommitObject, buf *bytes.Buffer) error {
+	// find tree hash
+	bi, err := buf.ReadBytes('\n')
+	if err != nil {
+		return err
+	}
+	hash := strings.Split(string(bi[:len(bi)-1]), " ")[1]
+	pp.Println(hash)
+	b, err := openObject(hash)
+	if err != nil {
+		return err
+	}
+
+	s := bufio.NewScanner(buf)
+	commit, err := parseCommit(s)
+	if err != nil {
+		return err
+	}
+	obj.Body = commit
+
+	bobj, err := Parse(b)
+	if err != nil {
+		return err
+	}
+	obj.Body.Tree = bobj.(*TreeObject)
+
+	return nil
+}
+
+func Parse(buf *bytes.Buffer) (interface{}, error) {
+	var obj object
 	n, b, err := parseType(buf)
 	buf.Next(n)
 	if err != nil {
@@ -101,15 +169,44 @@ func Parse(buf *bytes.Buffer) (*Object, error) {
 		return nil, err
 	}
 
-	s := bufio.NewScanner(buf)
-	s.Scan() // skip header
-	commit, err := parseCommit(s)
+	switch obj.Type {
+	case "commit":
+		obj := &CommitObject{object: obj}
+		err = ParseCommit(obj, buf)
+		return obj, err
+	case "tree":
+		obj := &TreeObject{object: obj}
+		err = ParseTree(obj, buf)
+		return obj, err
+	default:
+		return nil, fmt.Errorf("unknown type: %s", obj.Type)
+	}
 	if err != nil {
 		return nil, err
 	}
-	obj.Body = commit
+	return nil, nil
+}
 
-	return &obj, nil
+func openObject(name string) (*bytes.Buffer, error) {
+	p := filepath.Join(".git", "objects", name[:2], name[2:])
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	r, err := zlib.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	buf := &bytes.Buffer{}
+	_, err = io.Copy(buf, r)
+	if err != nil {
+		return nil, err
+	}
+	return buf, nil
 }
 
 func main() {
@@ -117,26 +214,10 @@ func main() {
 		panic("one argument required")
 	}
 
-	p := filepath.Join(".git", "objects", os.Args[1][:2], os.Args[1][2:])
-	f, err := os.Open(p)
+	buf, err := openObject(os.Args[1])
 	if err != nil {
 		panic(err)
 	}
-	defer f.Close()
-
-	r, err := zlib.NewReader(f)
-	if err != nil {
-		panic(err)
-	}
-	defer r.Close()
-
-	buf := &bytes.Buffer{}
-	_, err = io.Copy(buf, r)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println(buf.String())
 
 	obj, err := Parse(buf)
 	if err != nil {
