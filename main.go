@@ -97,7 +97,6 @@ func parseCommit(s *bufio.Scanner) (*Commit, error) {
 	var commit Commit
 	for s.Scan() {
 		line := s.Text()
-		pp.Println(line)
 		sp := strings.Split(line, " ")
 		switch sp[0] {
 		case "parent":
@@ -147,7 +146,6 @@ func ParseCommit(obj *CommitObject, buf *bytes.Buffer) error {
 		return err
 	}
 	hash := strings.Split(string(bi[:len(bi)-1]), " ")[1]
-	pp.Println(hash)
 	b, err := openObject(hash)
 	if err != nil {
 		return err
@@ -283,8 +281,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	pp.Println(buf.String())
 
 	obj, err := Parse(buf)
 	if err != nil {
